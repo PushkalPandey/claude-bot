@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Slack Bot – Code Flow</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      padding: 40px 20px;
+      min-height: 100vh;
+    }
+
+    h1 {
+      text-align: center;
+      font-size: 2rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+      background: linear-gradient(135deg, #7c3aed, #3b82f6, #06b6d4);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: #64748b;
+      margin-bottom: 48px;
+      font-size: 0.95rem;
+    }
+
+    /* ── Layout ── */
+    .page { max-width: 960px; margin: 0 auto; }
+
+    /* ── Section titles ── */
+    .section-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 18px;
+      padding-left: 4px;
+      border-left: 3px solid #7c3aed;
+      padding-left: 12px;
+    }
+
+    /* ── Overview cards ── */
+    .overview-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 48px;
+    }
+
+    .card {
+      background: #1e2130;
+      border: 1px solid #2d3348;
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+      transition: border-color 0.2s;
+    }
+    .card:hover { border-color: #7c3aed; }
+    .card .icon { font-size: 2rem; margin-bottom: 10px; }
+    .card .label { font-size: 0.8rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.06em; }
+    .card .value { font-size: 1.05rem; font-weight: 600; color: #e2e8f0; margin-top: 4px; }
+
+    /* ── Main flow diagram ── */
+    .flow-wrapper {
+      margin-bottom: 48px;
+    }
+
+    .flow {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0;
+    }
+
+    .flow-node {
+      width: 100%;
+      max-width: 680px;
+      background: #1e2130;
+      border: 1px solid #2d3348;
+      border-radius: 12px;
+      padding: 18px 24px;
+      position: relative;
+      cursor: default;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .flow-node:hover {
+      border-color: #7c3aed;
+      box-shadow: 0 0 0 1px #7c3aed33;
+    }
+
+    .flow-node .node-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .node-icon { font-size: 1.4rem; }
+    .node-title { font-size: 1rem; font-weight: 700; color: #c4b5fd; }
+    .node-file { font-size: 0.72rem; color: #475569; margin-left: auto; font-family: monospace; }
+
+    .node-desc { font-size: 0.88rem; color: #94a3b8; line-height: 1.55; }
+
+    /* node colour variants */
+    .node-entry   { border-left: 4px solid #3b82f6; }
+    .node-event   { border-left: 4px solid #06b6d4; }
+    .node-handler { border-left: 4px solid #7c3aed; }
+    .node-exec    { border-left: 4px solid #f59e0b; }
+    .node-output  { border-left: 4px solid #22c55e; }
+    .node-error   { border-left: 4px solid #ef4444; }
+
+    /* arrow between nodes */
+    .flow-arrow {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      margin: 4px 0;
+    }
+    .flow-arrow .line {
+      width: 2px;
+      height: 18px;
+      background: #2d3348;
+    }
+    .flow-arrow .head {
+      width: 0;
+      height: 0;
+      border-left: 6px solid transparent;
+      border-right: 6px solid transparent;
+      border-top: 8px solid #2d3348;
+    }
+    .flow-arrow .label {
+      font-size: 0.7rem;
+      color: #475569;
+      margin-top: -2px;
+      background: #0f1117;
+      padding: 0 6px;
+    }
+
+    /* ── Decision branch ── */
+    .branch-wrapper {
+      width: 100%;
+      max-width: 680px;
+    }
+
+    .branch-title {
+      text-align: center;
+      background: #1e2130;
+      border: 1px dashed #2d3348;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 0.85rem;
+      color: #f59e0b;
+      margin-bottom: 10px;
+      font-weight: 600;
+    }
+
+    .branch-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+    }
+
+    .branch-card {
+      background: #1a1f2e;
+      border: 1px solid #2d3348;
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .branch-card .b-title {
+      font-size: 0.8rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .branch-card .b-body {
+      font-size: 0.78rem;
+      color: #64748b;
+      line-height: 1.5;
+    }
+    .branch-card.stop   .b-title { color: #ef4444; }
+    .branch-card.reset  .b-title { color: #f59e0b; }
+    .branch-card.prompt .b-title { color: #22c55e; }
+
+    /* ── Global state panel ── */
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 48px;
+    }
+    .state-card {
+      background: #1e2130;
+      border: 1px solid #2d3348;
+      border-radius: 12px;
+      padding: 18px;
+    }
+    .state-card .s-name {
+      font-family: monospace;
+      font-size: 0.9rem;
+      color: #c4b5fd;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .state-card .s-type {
+      font-size: 0.7rem;
+      color: #475569;
+      font-family: monospace;
+      margin-bottom: 8px;
+    }
+    .state-card .s-desc { font-size: 0.82rem; color: #94a3b8; line-height: 1.5; }
+
+    /* ── Command table ── */
+    .cmd-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 48px;
+      font-size: 0.88rem;
+    }
+    .cmd-table thead tr { background: #1a1f2e; }
+    .cmd-table th {
+      text-align: left;
+      padding: 12px 16px;
+      color: #64748b;
+      font-weight: 600;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid #2d3348;
+    }
+    .cmd-table td {
+      padding: 12px 16px;
+      border-bottom: 1px solid #1a1f2e;
+      vertical-align: top;
+    }
+    .cmd-table tr:hover td { background: #1a1f2e; }
+    .cmd-table code {
+      background: #0d1117;
+      border: 1px solid #2d3348;
+      border-radius: 4px;
+      padding: 2px 7px;
+      font-size: 0.82rem;
+      color: #7c3aed;
+      font-family: monospace;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 99px;
+      font-size: 0.72rem;
+      font-weight: 600;
+    }
+    .badge-blue   { background: #1e3a5f; color: #60a5fa; }
+    .badge-yellow { background: #3d2e00; color: #fbbf24; }
+    .badge-green  { background: #0d2e1a; color: #4ade80; }
+
+    /* ── JSON struct ── */
+    .struct-box {
+      background: #0d1117;
+      border: 1px solid #2d3348;
+      border-radius: 10px;
+      padding: 20px 24px;
+      font-family: monospace;
+      font-size: 0.88rem;
+      margin-bottom: 48px;
+      line-height: 1.8;
+    }
+    .struct-box .kw { color: #7c3aed; }
+    .struct-box .ty { color: #06b6d4; }
+    .struct-box .field { color: #e2e8f0; }
+    .struct-box .tag { color: #64748b; }
+    .struct-box .comment { color: #475569; }
+
+    /* ── Concurrency section ── */
+    .concur-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 48px;
+    }
+    .concur-card {
+      background: #1e2130;
+      border: 1px solid #2d3348;
+      border-radius: 12px;
+      padding: 18px;
+    }
+    .concur-card .c-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: #f59e0b;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .concur-card .c-body { font-size: 0.82rem; color: #94a3b8; line-height: 1.6; }
+
+    /* responsive */
+    @media (max-width: 620px) {
+      .branch-grid { grid-template-columns: 1fr; }
+      .concur-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <h1>Slack Bot — Code Flow</h1>
+  <p class="subtitle">A visual walkthrough of <code style="color:#7c3aed;background:#1a1f2e;padding:2px 8px;border-radius:4px;">main.go</code> · Built with Go · Powered by Claude CLI</p>
+
+  <!-- ── Overview ── -->
+  <div class="section-title">What this bot does</div>
+  <div class="overview-grid">
+    <div class="card">
+      <div class="icon">💬</div>
+      <div class="label">Input</div>
+      <div class="value">Slack Messages</div>
+    </div>
+    <div class="card">
+      <div class="icon">🤖</div>
+      <div class="label">Brain</div>
+      <div class="value">Claude CLI</div>
+    </div>
+    <div class="card">
+      <div class="icon">🧵</div>
+      <div class="label">Reply style</div>
+      <div class="value">Threaded replies</div>
+    </div>
+    <div class="card">
+      <div class="icon">🔗</div>
+      <div class="label">Slack API</div>
+      <div class="value">Socket Mode</div>
+    </div>
+    <div class="card">
+      <div class="icon">🗂️</div>
+      <div class="label">Memory</div>
+      <div class="value">Per-channel sessions</div>
+    </div>
+  </div>
+
+  <!-- ── Main flow ── -->
+  <div class="section-title">Execution Flow — step by step</div>
+  <div class="flow-wrapper">
+    <div class="flow">
+
+      <!-- 1 -->
+      <div class="flow-node node-entry">
+        <div class="node-header">
+          <span class="node-icon">🚀</span>
+          <span class="node-title">main() — Program starts</span>
+          <span class="node-file">main.go:33</span>
+        </div>
+        <div class="node-desc">
+          Reads two environment variables: <strong>SLACK_BOT_TOKEN</strong> (identifies your bot) and
+          <strong>SLACK_APP_TOKEN</strong> (enables Socket Mode). If either is missing the program exits immediately with an error.
+          Then it creates a Slack API client and a Socket Mode client, and starts a background goroutine to listen for events.
+        </div>
+      </div>
+
+      <div class="flow-arrow">
+        <div class="line"></div>
+        <div class="label">WebSocket connection</div>
+        <div class="head"></div>
+      </div>
+
+      <!-- 2 -->
+      <div class="flow-node node-event">
+        <div class="node-header">
+          <span class="node-icon">🔌</span>
+          <span class="node-title">Socket Mode connection established</span>
+          <span class="node-file">main.go:49–75</span>
+        </div>
+        <div class="node-desc">
+          The bot connects to Slack over a <strong>WebSocket</strong> (Socket Mode) — no public URL or server needed.
+          A goroutine runs an infinite loop reading from <code>client.Events</code>.
+          On connect it prints "Connected! Listening…".
+          Every event from Slack arrives here.
+        </div>
+      </div>
+
+      <div class="flow-arrow">
+        <div class="line"></div>
+        <div class="label">user sends a message</div>
+        <div class="head"></div>
+      </div>
+
+      <!-- 3 -->
+      <div class="flow-node node-event">
+        <div class="node-header">
+          <span class="node-icon">📨</span>
+          <span class="node-title">EventsAPI message received</span>
+          <span class="node-file">main.go:56–73</span>
+        </div>
+        <div class="node-desc">
+          When a <strong>message event</strong> arrives the bot immediately ACKs it (tells Slack "got it")
+          so Slack doesn't retry. Then it filters out bot messages, edited messages, and deleted messages —
+          only real human text moves forward. A new goroutine is spawned so the bot can handle the
+          next message without waiting.
+        </div>
+      </div>
+
+      <div class="flow-arrow">
+        <div class="line"></div>
+        <div class="label">go handleMessage()</div>
+        <div class="head"></div>
+      </div>
+
+      <!-- 4 — branch decision -->
+      <div class="branch-wrapper">
+        <div class="branch-title">🔀 handleMessage() — What kind of message is it?  <span style="color:#64748b;font-weight:400;font-size:0.78rem;">main.go:80</span></div>
+        <div class="branch-grid">
+          <div class="branch-card stop">
+            <div class="b-title">⛔ "stop" or "kill"</div>
+            <div class="b-body">
+              Calls <code>cancelFunc()</code> which cancels the running Claude process's context.
+              The subprocess is killed. Replies "⛔ Killed." in thread.
+            </div>
+          </div>
+          <div class="branch-card reset">
+            <div class="b-title">🔄 "reset" or "new session"</div>
+            <div class="b-body">
+              Deletes the stored session ID for this Slack channel.
+              The next message will start a brand-new Claude conversation.
+              Replies "🔄 Session reset." in thread.
+            </div>
+          </div>
+          <div class="branch-card prompt">
+            <div class="b-title">✅ Any other text</div>
+            <div class="b-body">
+              Treated as a prompt for Claude. Checks if Claude is already running —
+              if so, rejects with a warning. Otherwise, proceeds to execute Claude CLI.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-arrow">
+        <div class="line"></div>
+        <div class="label">normal prompt path</div>
+        <div class="head"></div>
+      </div>
+
+      <!-- 5 -->
+      <div class="flow-node node-exec">
+        <div class="node-header">
+          <span class="node-icon">⚙️</span>
+          <span class="node-title">Build &amp; run Claude CLI command</span>
+          <span class="node-file">main.go:130–141</span>
+        </div>
+        <div class="node-desc">
+          Builds the shell command:
+          <code>claude --dangerously-skip-permissions -p "&lt;your message&gt;" --output-format json</code><br><br>
+          If this channel has a previous session ID saved, it appends <code>--resume &lt;session_id&gt;</code>
+          so Claude remembers the conversation history. The command runs with a <strong>cancellable context</strong>
+          so it can be killed mid-run by the "stop" command.
+        </div>
+      </div>
+
+      <div class="flow-arrow">
+        <div class="line"></div>
+        <div class="label">waits for Claude to finish</div>
+        <div class="head"></div>
+      </div>
+
+      <!-- 6 -->
+      <div class="flow-node node-handler">
+        <div class="node-header">
+          <span class="node-icon">📦</span>
+          <span class="node-title">Parse Claude's JSON response</span>
+          <span class="node-file">main.go:163–178</span>
+        </div>
+        <div class="node-desc">
+          Claude returns JSON that looks like <code>{"result":"…","session_id":"…","is_error":false}</code>.
+          The bot parses this into the <code>claudeResult</code> struct.
+          The <strong>session_id</strong> is saved per channel so the next message continues the same conversation.
+          If JSON parsing fails, the raw output is sent as a fallback.
+        </div>
+      </div>
+
+      <div class="flow-arrow">
+        <div class="line"></div>
+        <div class="label">reply &gt; 2800 chars? truncate</div>
+        <div class="head"></div>
+      </div>
+
+      <!-- 7 -->
+      <div class="flow-node node-output">
+        <div class="node-header">
+          <span class="node-icon">📤</span>
+          <span class="node-title">postMessage() — send reply to Slack</span>
+          <span class="node-file">main.go:192</span>
+        </div>
+        <div class="node-desc">
+          Calls <code>api.PostMessage(channel, ...)</code> with the reply text.
+          Uses the original message's <strong>timestamp (ts)</strong> as the thread parent —
+          all bot replies appear as threads under the user's message, keeping channels tidy.
+          Responses longer than <strong>2800 characters</strong> are truncated.
+        </div>
+      </div>
+
+    </div><!-- /flow -->
+  </div><!-- /flow-wrapper -->
+
+  <!-- ── Global State ── -->
+  <div class="section-title">Global State (shared memory)</div>
+  <div class="state-grid">
+    <div class="state-card">
+      <div class="s-name">runningCmd</div>
+      <div class="s-type">*exec.Cmd</div>
+      <div class="s-desc">
+        Holds the currently-running Claude subprocess. Used to detect if Claude is already busy.
+        Set to <code>nil</code> when the process finishes.
+      </div>
+    </div>
+    <div class="state-card">
+      <div class="s-name">runningMu</div>
+      <div class="s-type">sync.Mutex</div>
+      <div class="s-desc">
+        Protects <code>runningCmd</code> and <code>cancelFunc</code> from race conditions.
+        Because multiple Goroutines can handle messages at the same time, this lock ensures
+        only one goroutine modifies these values at a time.
+      </div>
+    </div>
+    <div class="state-card">
+      <div class="s-name">cancelFunc</div>
+      <div class="s-type">context.CancelFunc</div>
+      <div class="s-desc">
+        A function that, when called, cancels the running Claude command's context — killing the subprocess.
+        The "stop"/"kill" command calls this.
+      </div>
+    </div>
+    <div class="state-card">
+      <div class="s-name">sessions</div>
+      <div class="s-type">map[string]string</div>
+      <div class="s-desc">
+        Maps <strong>Slack channel ID → Claude session ID</strong>.
+        Allows each channel to have its own continuous conversation with Claude.
+        Cleared by the "reset" command.
+      </div>
+    </div>
+    <div class="state-card">
+      <div class="s-name">sessionsMu</div>
+      <div class="s-type">sync.Mutex</div>
+      <div class="s-desc">
+        Protects the <code>sessions</code> map from concurrent read/write.
+      </div>
+    </div>
+  </div>
+
+  <!-- ── claudeResult struct ── -->
+  <div class="section-title">Claude CLI Response Structure</div>
+  <div class="struct-box">
+    <span class="kw">type</span> <span class="ty">claudeResult</span> <span class="kw">struct</span> {<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">Result</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="ty">string</span> <span class="tag">`json:"result"`</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">// The actual reply text from Claude</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">SessionID</span> <span class="ty">string</span> <span class="tag">`json:"session_id"`</span> <span class="comment">// Used to resume conversation next time</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">IsError</span>&nbsp;&nbsp; <span class="ty">bool</span>&nbsp;&nbsp; <span class="tag">`json:"is_error"`</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">// true if Claude returned an error</span><br>
+    }
+  </div>
+
+  <!-- ── Commands ── -->
+  <div class="section-title">Supported Slack Commands</div>
+  <table class="cmd-table">
+    <thead>
+      <tr>
+        <th>Message</th>
+        <th>Type</th>
+        <th>What happens</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>stop</code> / <code>kill</code></td>
+        <td><span class="badge badge-yellow">Control</span></td>
+        <td>Cancels the running Claude process mid-execution. Replies "⛔ Killed."</td>
+      </tr>
+      <tr>
+        <td><code>reset</code> / <code>new session</code></td>
+        <td><span class="badge badge-yellow">Control</span></td>
+        <td>Clears Claude's conversation history for this channel. Next message starts fresh.</td>
+      </tr>
+      <tr>
+        <td><em>any other text</em></td>
+        <td><span class="badge badge-green">Prompt</span></td>
+        <td>Sent to Claude CLI as a prompt. Response posted as a thread reply.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ── Concurrency ── -->
+  <div class="section-title">Concurrency Model</div>
+  <div class="concur-grid">
+    <div class="concur-card">
+      <div class="c-title">🔒 Mutex locks</div>
+      <div class="c-body">
+        Two mutexes protect shared state: <strong>runningMu</strong> protects the active subprocess and cancel function,
+        <strong>sessionsMu</strong> protects the session map. This prevents data races when two messages
+        arrive at the same time.
+      </div>
+    </div>
+    <div class="concur-card">
+      <div class="c-title">⚡ Goroutines</div>
+      <div class="c-body">
+        Each incoming message is handled in its own <strong>goroutine</strong> (<code>go handleMessage(...)</code>).
+        The event-listening loop is also a goroutine. The main thread simply blocks on <code>client.Run()</code>.
+      </div>
+    </div>
+    <div class="concur-card">
+      <div class="c-title">❌ Only one Claude at a time</div>
+      <div class="c-body">
+        Even though messages are handled concurrently, the bot enforces that only <strong>one</strong>
+        Claude subprocess runs at a time (via <code>runningCmd</code> check). New prompts are rejected
+        with a warning until the current one finishes or is killed.
+      </div>
+    </div>
+    <div class="concur-card">
+      <div class="c-title">🎯 Context cancellation</div>
+      <div class="c-body">
+        Claude runs inside a <code>context.WithCancel</code>. When "stop" is sent, <code>cancelFunc()</code>
+        is called which propagates a cancellation signal to the subprocess, terminating it cleanly.
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Environment vars ── -->
+  <div class="section-title">Required Environment Variables</div>
+  <table class="cmd-table" style="margin-bottom:48px">
+    <thead>
+      <tr><th>Variable</th><th>Purpose</th><th>Where to get it</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>SLACK_BOT_TOKEN</code></td>
+        <td>Authenticates the bot with Slack's API. Starts with <code>xoxb-</code></td>
+        <td>Slack App → OAuth &amp; Permissions</td>
+      </tr>
+      <tr>
+        <td><code>SLACK_APP_TOKEN</code></td>
+        <td>Enables Socket Mode (WebSocket). Starts with <code>xapp-</code></td>
+        <td>Slack App → Basic Information → App-Level Tokens</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p style="text-align:center;color:#334155;font-size:0.8rem;padding-bottom:20px;">
+    Generated from <code>main.go</code> · slack-bot · 2026
+  </p>
+
+</div>
+</body>
+</html>
