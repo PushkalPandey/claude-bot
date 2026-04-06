@@ -11,11 +11,18 @@ User sends Slack message
         ↓
 Bot receives it via Socket Mode (WebSocket)
         ↓
-Runs: claude --dangerously-skip-permissions -p "<message>" --output-format json
+Posts "🤔 Thinking..." placeholder in thread
         ↓
-Parses JSON response from Claude
+Runs: claude --dangerously-skip-permissions --verbose -p "<message>" --output-format stream-json
         ↓
-Posts reply in the Slack thread
+Background goroutine reads stream-json events line by line
+  • "assistant" events → accumulate text + record tool_use steps
+  • "result" event    → capture session_id, token counts, cost
+        ↓
+Ticker updates the Slack message every 2 seconds (live streaming)
+  showing: elapsed time · token counts · tool steps · partial response
+        ↓
+On completion: final message updated with full response + cost footer
 ```
 
 Each Slack channel maintains its own Claude **session**, so conversations have memory across messages.
@@ -92,10 +99,11 @@ slack-bot/
 
 | Function | Lines | Purpose |
 |----------|-------|---------|
-| `main()` | 33–78 | Starts bot, sets up Slack client, event loop |
-| `handleMessage()` | 80–190 | Routes messages, runs Claude, returns response |
-| `postMessage()` | 192–203 | Sends a message to Slack (threaded reply) |
-| `claudeResult` | 27–31 | Struct for parsing Claude's JSON output |
+| `main()` | 118–163 | Starts bot, sets up Slack client, event loop |
+| `handleMessage()` | 165–419 | Routes messages, runs Claude, live-streams response |
+| `describeToolUse()` | 72–116 | Converts a `tool_use` block into a human-readable step line |
+| `postMessage()` | 421–430 | Sends a new Slack message (threaded reply) |
+| `updateMessage()` | 432–437 | Edits an existing Slack message in place |
 
 ---
 
@@ -111,18 +119,36 @@ slack-bot/
 
 Only **one** Claude process runs at a time. If a new message arrives while Claude is running, the bot replies with a warning and rejects it.
 
+### Key structs
+
+| Struct | Purpose |
+|--------|---------|
+| `streamEvent` | Top-level stream-json line (type, message, result, session_id, usage…) |
+| `assistantMsg` | Nested in `streamEvent.Message`; holds a slice of content blocks |
+| `contentBlock` | A single `text` or `tool_use` block inside an assistant message |
+| `tokenUsage` | Input/output token counts |
+| `toolStep` | Emoji + label pair shown in the live Slack feed |
+
 ---
 
 ## Claude CLI flags used
 
 ```
-claude --dangerously-skip-permissions -p "<prompt>" --output-format json [--resume <session_id>]
+claude --dangerously-skip-permissions --verbose -p "<prompt>" --output-format stream-json [--resume <session_id>]
 ```
 
 - `--dangerously-skip-permissions` — skips interactive permission prompts
+- `--verbose` — emits intermediate events (tool use, partial text) over stdout
 - `-p` — non-interactive prompt mode
-- `--output-format json` — returns structured JSON with `result`, `session_id`, `is_error`
+- `--output-format stream-json` — emits one JSON event per line; enables live streaming
 - `--resume` — continues an existing conversation session
+
+### Stream-JSON event types handled
+
+| Event type | What the bot does |
+|------------|-------------------|
+| `assistant` | Accumulates text content; records `tool_use` steps via `describeToolUse()` |
+| `result` | Captures `session_id`, `is_error`, `duration_ms`, `total_cost_usd`, `num_turns` |
 
 ---
 

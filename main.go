@@ -26,9 +26,10 @@ var (
 	sessionsMu sync.Mutex
 )
 
-// Stream JSON event types from Claude CLI --output-format stream-json
+// Stream JSON event types from Claude CLI --output-format stream-json --verbose
 type streamEvent struct {
 	Type         string        `json:"type"`
+	Subtype      string        `json:"subtype,omitempty"`
 	Message      *assistantMsg `json:"message,omitempty"`
 	Result       string        `json:"result,omitempty"`
 	SessionID    string        `json:"session_id,omitempty"`
@@ -36,6 +37,10 @@ type streamEvent struct {
 	DurationMs   int64         `json:"duration_ms,omitempty"`
 	TotalCostUSD float64       `json:"total_cost_usd,omitempty"`
 	Usage        *tokenUsage   `json:"usage,omitempty"`
+	NumTurns     int           `json:"num_turns,omitempty"`
+	// tool_result event fields
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	Content   string `json:"content,omitempty"`
 }
 
 type assistantMsg struct {
@@ -44,13 +49,70 @@ type assistantMsg struct {
 }
 
 type contentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type  string          `json:"type"`
+	Text  string          `json:"text,omitempty"`
+	// tool_use fields
+	ID    string          `json:"id,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
 }
 
 type tokenUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+}
+
+// toolStep holds a single tool invocation for the live feed
+type toolStep struct {
+	emoji string
+	label string
+}
+
+// describeToolUse converts a tool_use block into a human-readable step line
+func describeToolUse(name string, rawInput json.RawMessage) toolStep {
+	var input map[string]interface{}
+	_ = json.Unmarshal(rawInput, &input)
+
+	str := func(key string) string {
+		if v, ok := input[key]; ok {
+			if s, ok := v.(string); ok {
+				if len(s) > 60 {
+					return s[:60] + "…"
+				}
+				return s
+			}
+		}
+		return ""
+	}
+
+	switch name {
+	case "bash", "Bash":
+		cmd := str("command")
+		if cmd == "" {
+			cmd = str("cmd")
+		}
+		return toolStep{"🖥️", fmt.Sprintf("Bash: `%s`", cmd)}
+	case "read", "Read":
+		return toolStep{"📖", fmt.Sprintf("Read: `%s`", str("file_path"))}
+	case "write", "Write":
+		return toolStep{"✏️", fmt.Sprintf("Write: `%s`", str("file_path"))}
+	case "edit", "Edit":
+		return toolStep{"✏️", fmt.Sprintf("Edit: `%s`", str("file_path"))}
+	case "glob", "Glob":
+		return toolStep{"🔍", fmt.Sprintf("Glob: `%s`", str("pattern"))}
+	case "grep", "Grep":
+		return toolStep{"🔍", fmt.Sprintf("Grep: `%s`", str("pattern"))}
+	case "web_search", "WebSearch":
+		return toolStep{"🌐", fmt.Sprintf("Search: `%s`", str("query"))}
+	case "web_fetch", "WebFetch":
+		return toolStep{"🌐", fmt.Sprintf("Fetch: `%s`", str("url"))}
+	case "todowrite", "TodoWrite", "task_create", "TaskCreate":
+		return toolStep{"📋", fmt.Sprintf("Task: `%s`", str("subject"))}
+	case "agent", "Agent":
+		return toolStep{"🤖", fmt.Sprintf("Agent: `%s`", str("description"))}
+	default:
+		return toolStep{"🔧", fmt.Sprintf("Tool: `%s`", name)}
+	}
 }
 
 func main() {
@@ -165,7 +227,7 @@ func handleMessage(api *slack.Client, ev *slackevents.MessageEvent) {
 	}
 
 	// Build claude command with stream-json
-	args := []string{"--dangerously-skip-permissions", "-p", text, "--output-format", "stream-json"}
+	args := []string{"--dangerously-skip-permissions", "--verbose", "-p", text, "--output-format", "stream-json"}
 	if sessionID != "" {
 		args = append(args, "--resume", sessionID)
 	}
@@ -192,10 +254,14 @@ func handleMessage(api *slack.Client, ev *slackevents.MessageEvent) {
 	var (
 		mu           sync.Mutex
 		accumulated  string
+		steps        []toolStep
 		inputTokens  int
 		outputTokens int
+		numTurns     int
 		finalEvent   *streamEvent
 	)
+
+	startTime := time.Now()
 
 	// Read stream-json lines in background
 	done := make(chan struct{})
@@ -213,8 +279,11 @@ func handleMessage(api *slack.Client, ev *slackevents.MessageEvent) {
 			case "assistant":
 				if evt.Message != nil {
 					for _, c := range evt.Message.Content {
-						if c.Type == "text" {
+						switch c.Type {
+						case "text":
 							accumulated += c.Text
+						case "tool_use":
+							steps = append(steps, describeToolUse(c.Name, c.Input))
 						}
 					}
 					if evt.Message.Usage != nil {
@@ -232,10 +301,61 @@ func handleMessage(api *slack.Client, ev *slackevents.MessageEvent) {
 					inputTokens = evt.Usage.InputTokens
 					outputTokens = evt.Usage.OutputTokens
 				}
+				if evt.NumTurns > 0 {
+					numTurns = evt.NumTurns
+				}
 			}
 			mu.Unlock()
 		}
 	}()
+
+	// buildLive assembles the live status message
+	buildLive := func(done bool) string {
+		mu.Lock()
+		defer mu.Unlock()
+
+		elapsed := time.Since(startTime).Round(time.Second)
+		header := fmt.Sprintf("⏱ *%s* elapsed · %d in / %d out tokens", elapsed, inputTokens, outputTokens)
+		if numTurns > 0 {
+			header += fmt.Sprintf(" · %d turns", numTurns)
+		}
+
+		var sb strings.Builder
+
+		// Steps log (last 10)
+		if len(steps) > 0 {
+			sb.WriteString("*Steps taken:*\n")
+			start := 0
+			if len(steps) > 10 {
+				start = len(steps) - 10
+				sb.WriteString(fmt.Sprintf("  _(+%d earlier steps)_\n", start))
+			}
+			for i := start; i < len(steps); i++ {
+				s := steps[i]
+				sb.WriteString(fmt.Sprintf("%s %s\n", s.emoji, s.label))
+			}
+			sb.WriteString("\n")
+		}
+
+		// Partial text
+		if accumulated != "" {
+			preview := accumulated
+			maxPreview := 1800
+			if len(preview) > maxPreview {
+				preview = "…" + preview[len(preview)-maxPreview:]
+			}
+			if !done {
+				sb.WriteString("*Response (streaming…)*\n")
+			} else {
+				sb.WriteString("*Response:*\n")
+			}
+			sb.WriteString(preview)
+			sb.WriteString("\n\n")
+		}
+
+		sb.WriteString(header)
+		return sb.String()
+	}
 
 	// Ticker: edit the Slack message every 2 seconds while running
 	ticker := time.NewTicker(2 * time.Second)
@@ -245,18 +365,7 @@ loop:
 	for {
 		select {
 		case <-ticker.C:
-			mu.Lock()
-			partial := accumulated
-			in, out := inputTokens, outputTokens
-			mu.Unlock()
-
-			if partial != "" {
-				msg := fmt.Sprintf("💭 Claude is responding...\n\n%s\n\n⏱ Tokens: %d in / %d out", partial, in, out)
-				if len(msg) > 3000 {
-					msg = msg[:3000] + "\n... (truncated)"
-				}
-				updateMessage(api, channel, msgTS, msg)
-			}
+			updateMessage(api, channel, msgTS, buildLive(false))
 		case <-done:
 			break loop
 		}
@@ -271,8 +380,6 @@ loop:
 
 	mu.Lock()
 	fe := finalEvent
-	accText := accumulated
-	in, out := inputTokens, outputTokens
 	mu.Unlock()
 
 	if fe == nil {
@@ -281,11 +388,11 @@ loop:
 	}
 
 	if fe.IsError {
-		reply := fe.Result
-		if reply == "" {
-			reply = "(unknown error)"
+		errMsg := fe.Result
+		if errMsg == "" {
+			errMsg = "(unknown error)"
 		}
-		updateMessage(api, channel, msgTS, fmt.Sprintf("❌ Error: %s", reply))
+		updateMessage(api, channel, msgTS, fmt.Sprintf("❌ Error: %s", errMsg))
 		return
 	}
 
@@ -296,25 +403,16 @@ loop:
 		sessionsMu.Unlock()
 	}
 
-	// Build final message
-	reply := fe.Result
-	if reply == "" {
-		reply = accText
-	}
-	if reply == "" {
-		reply = "(no response)"
-	}
+	// Build final message using the same live builder (done=true)
+	finalMsg := buildLive(true)
 
-	footer := fmt.Sprintf("✅ Done · %.1fs · %d in / %d out tokens · $%.4f",
-		float64(fe.DurationMs)/1000.0, in, out, fe.TotalCostUSD)
+	// Append final cost/time footer
+	footer := fmt.Sprintf("✅ *Done* · %.1fs · %d turns · $%.4f",
+		float64(fe.DurationMs)/1000.0, fe.NumTurns, fe.TotalCostUSD)
+	finalMsg += "\n" + footer
 
-	finalMsg := reply + "\n\n" + footer
-	if len(finalMsg) > 3000 {
-		maxReply := 3000 - len(footer) - 10
-		if maxReply > 0 {
-			reply = reply[:maxReply] + "...\n(truncated)"
-		}
-		finalMsg = reply + "\n\n" + footer
+	if len(finalMsg) > 3900 {
+		finalMsg = finalMsg[:3900] + "\n…(truncated)"
 	}
 
 	updateMessage(api, channel, msgTS, finalMsg)

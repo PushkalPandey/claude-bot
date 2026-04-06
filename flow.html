@@ -330,9 +330,9 @@
       <div class="value">Claude CLI</div>
     </div>
     <div class="card">
-      <div class="icon">🧵</div>
-      <div class="label">Reply style</div>
-      <div class="value">Threaded replies</div>
+      <div class="icon">📡</div>
+      <div class="label">Output format</div>
+      <div class="value">Live-streamed updates</div>
     </div>
     <div class="card">
       <div class="icon">🔗</div>
@@ -356,7 +356,7 @@
         <div class="node-header">
           <span class="node-icon">🚀</span>
           <span class="node-title">main() — Program starts</span>
-          <span class="node-file">main.go:33</span>
+          <span class="node-file">main.go:118</span>
         </div>
         <div class="node-desc">
           Reads two environment variables: <strong>SLACK_BOT_TOKEN</strong> (identifies your bot) and
@@ -376,7 +376,7 @@
         <div class="node-header">
           <span class="node-icon">🔌</span>
           <span class="node-title">Socket Mode connection established</span>
-          <span class="node-file">main.go:49–75</span>
+          <span class="node-file">main.go:134–160</span>
         </div>
         <div class="node-desc">
           The bot connects to Slack over a <strong>WebSocket</strong> (Socket Mode) — no public URL or server needed.
@@ -397,7 +397,7 @@
         <div class="node-header">
           <span class="node-icon">📨</span>
           <span class="node-title">EventsAPI message received</span>
-          <span class="node-file">main.go:56–73</span>
+          <span class="node-file">main.go:141–158</span>
         </div>
         <div class="node-desc">
           When a <strong>message event</strong> arrives the bot immediately ACKs it (tells Slack "got it")
@@ -415,7 +415,7 @@
 
       <!-- 4 — branch decision -->
       <div class="branch-wrapper">
-        <div class="branch-title">🔀 handleMessage() — What kind of message is it?  <span style="color:#64748b;font-weight:400;font-size:0.78rem;">main.go:80</span></div>
+        <div class="branch-title">🔀 handleMessage() — What kind of message is it?  <span style="color:#64748b;font-weight:400;font-size:0.78rem;">main.go:165</span></div>
         <div class="branch-grid">
           <div class="branch-card stop">
             <div class="b-title">⛔ "stop" or "kill"</div>
@@ -453,56 +453,62 @@
         <div class="node-header">
           <span class="node-icon">⚙️</span>
           <span class="node-title">Build &amp; run Claude CLI command</span>
-          <span class="node-file">main.go:130–141</span>
+          <span class="node-file">main.go:229–235</span>
         </div>
         <div class="node-desc">
-          Builds the shell command:
-          <code>claude --dangerously-skip-permissions -p "&lt;your message&gt;" --output-format json</code><br><br>
-          If this channel has a previous session ID saved, it appends <code>--resume &lt;session_id&gt;</code>
+          Posts a <strong>🤔 Thinking…</strong> placeholder message in the thread, then builds the command:<br><br>
+          <code>claude --dangerously-skip-permissions --verbose -p "&lt;prompt&gt;" --output-format stream-json</code><br><br>
+          If this channel has a previous session ID saved, appends <code>--resume &lt;session_id&gt;</code>
           so Claude remembers the conversation history. The command runs with a <strong>cancellable context</strong>
-          so it can be killed mid-run by the "stop" command.
+          so it can be killed mid-run by the "stop" command. stdout is piped for live reading.
         </div>
       </div>
 
       <div class="flow-arrow">
         <div class="line"></div>
-        <div class="label">waits for Claude to finish</div>
+        <div class="label">stdout piped — one JSON event per line</div>
         <div class="head"></div>
       </div>
 
       <!-- 6 -->
       <div class="flow-node node-handler">
         <div class="node-header">
-          <span class="node-icon">📦</span>
-          <span class="node-title">Parse Claude's JSON response</span>
-          <span class="node-file">main.go:163–178</span>
+          <span class="node-icon">📡</span>
+          <span class="node-title">Stream-JSON reader goroutine</span>
+          <span class="node-file">main.go:266–309</span>
         </div>
         <div class="node-desc">
-          Claude returns JSON that looks like <code>{"result":"…","session_id":"…","is_error":false}</code>.
-          The bot parses this into the <code>claudeResult</code> struct.
-          The <strong>session_id</strong> is saved per channel so the next message continues the same conversation.
-          If JSON parsing fails, the raw output is sent as a fallback.
+          A background goroutine scans stdout line by line. Each line is a <code>streamEvent</code> JSON object:<br><br>
+          • <strong>type "assistant"</strong> — accumulates text; feeds each <code>tool_use</code> block through
+          <code>describeToolUse()</code> to produce an emoji + label step (e.g. <em>🖥️ Bash: `go build …`</em>).<br>
+          • <strong>type "result"</strong> — stores the final <code>session_id</code>, <code>is_error</code>,
+          <code>duration_ms</code>, <code>total_cost_usd</code>, and <code>num_turns</code>.<br><br>
+          All writes go through a <code>sync.Mutex</code> shared with the ticker goroutine.
         </div>
       </div>
 
       <div class="flow-arrow">
         <div class="line"></div>
-        <div class="label">reply &gt; 2800 chars? truncate</div>
+        <div class="label">ticker fires every 2 s</div>
         <div class="head"></div>
       </div>
 
       <!-- 7 -->
       <div class="flow-node node-output">
         <div class="node-header">
-          <span class="node-icon">📤</span>
-          <span class="node-title">postMessage() — send reply to Slack</span>
-          <span class="node-file">main.go:192</span>
+          <span class="node-icon">🔄</span>
+          <span class="node-title">updateMessage() — live Slack edit every 2 s</span>
+          <span class="node-file">main.go:360–418</span>
         </div>
         <div class="node-desc">
-          Calls <code>api.PostMessage(channel, ...)</code> with the reply text.
-          Uses the original message's <strong>timestamp (ts)</strong> as the thread parent —
-          all bot replies appear as threads under the user's message, keeping channels tidy.
-          Responses longer than <strong>2800 characters</strong> are truncated.
+          A <code>time.Ticker</code> fires every <strong>2 seconds</strong> and calls <code>updateMessage()</code>
+          to edit the placeholder in place. The live message shows:<br><br>
+          • ⏱ elapsed time &amp; token counts<br>
+          • <em>Steps taken:</em> tool-use log (last 10 steps)<br>
+          • <em>Response (streaming…):</em> last 1 800 chars of accumulated text<br><br>
+          When the reader goroutine closes (Claude exits), the ticker stops, <code>cmd.Wait()</code> returns,
+          and a final <code>updateMessage()</code> is sent with the complete response plus a
+          <strong>✅ Done · Xs · N turns · $0.00XX</strong> cost footer. Responses over 3 900 chars are truncated.
         </div>
       </div>
 
@@ -555,14 +561,39 @@
     </div>
   </div>
 
-  <!-- ── claudeResult struct ── -->
-  <div class="section-title">Claude CLI Response Structure</div>
+  <!-- ── stream-json structs ── -->
+  <div class="section-title">Stream-JSON Data Structures</div>
   <div class="struct-box">
-    <span class="kw">type</span> <span class="ty">claudeResult</span> <span class="kw">struct</span> {<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">Result</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="ty">string</span> <span class="tag">`json:"result"`</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">// The actual reply text from Claude</span><br>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">SessionID</span> <span class="ty">string</span> <span class="tag">`json:"session_id"`</span> <span class="comment">// Used to resume conversation next time</span><br>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">IsError</span>&nbsp;&nbsp; <span class="ty">bool</span>&nbsp;&nbsp; <span class="tag">`json:"is_error"`</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">// true if Claude returned an error</span><br>
-    }
+    <span class="comment">// Top-level event — one per stdout line</span><br>
+    <span class="kw">type</span> <span class="ty">streamEvent</span> <span class="kw">struct</span> {<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">Type</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="ty">string</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="tag">`json:"type"`</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">// "assistant" | "result" | …</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">Message</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="ty">*assistantMsg</span>&nbsp;<span class="tag">`json:"message,omitempty"`</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">Result</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="ty">string</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="tag">`json:"result,omitempty"`</span>&nbsp;&nbsp;&nbsp;<span class="comment">// final text (result event)</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">SessionID</span>&nbsp;&nbsp;&nbsp;<span class="ty">string</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="tag">`json:"session_id,omitempty"`</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">IsError</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="ty">bool</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="tag">`json:"is_error,omitempty"`</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">DurationMs</span>&nbsp;&nbsp;<span class="ty">int64</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="tag">`json:"duration_ms,omitempty"`</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">TotalCostUSD</span> <span class="ty">float64</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="tag">`json:"total_cost_usd,omitempty"`</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">Usage</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="ty">*tokenUsage</span>&nbsp;&nbsp;&nbsp;<span class="tag">`json:"usage,omitempty"`</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">NumTurns</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="ty">int</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="tag">`json:"num_turns,omitempty"`</span><br>
+    }<br>
+    <br>
+    <span class="comment">// Nested inside streamEvent.Message</span><br>
+    <span class="kw">type</span> <span class="ty">assistantMsg</span> <span class="kw">struct</span> {<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">Content</span> <span class="ty">[]contentBlock</span> <span class="tag">`json:"content"`</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">Usage</span>&nbsp;&nbsp; <span class="ty">*tokenUsage</span>&nbsp;&nbsp;&nbsp;<span class="tag">`json:"usage,omitempty"`</span><br>
+    }<br>
+    <br>
+    <span class="comment">// One text or tool_use block inside an assistant message</span><br>
+    <span class="kw">type</span> <span class="ty">contentBlock</span> <span class="kw">struct</span> {<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">Type</span>&nbsp;&nbsp;<span class="ty">string</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="tag">`json:"type"`</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">// "text" | "tool_use"</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">Text</span>&nbsp;&nbsp;<span class="ty">string</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="tag">`json:"text,omitempty"`</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">ID</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="ty">string</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="tag">`json:"id,omitempty"`</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">Name</span>&nbsp;&nbsp;<span class="ty">string</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="tag">`json:"name,omitempty"`</span>&nbsp;&nbsp;&nbsp;<span class="comment">// tool name</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="field">Input</span> <span class="ty">json.RawMessage</span> <span class="tag">`json:"input,omitempty"`</span><br>
+    }<br>
+    <br>
+    <span class="comment">// toolStep — emoji+label pair shown in the live Slack feed</span><br>
+    <span class="kw">type</span> <span class="ty">toolStep</span> <span class="kw">struct</span> { <span class="field">emoji</span>, <span class="field">label</span> <span class="ty">string</span> }
   </div>
 
   <!-- ── Commands ── -->
@@ -609,7 +640,9 @@
       <div class="c-title">⚡ Goroutines</div>
       <div class="c-body">
         Each incoming message is handled in its own <strong>goroutine</strong> (<code>go handleMessage(...)</code>).
-        The event-listening loop is also a goroutine. The main thread simply blocks on <code>client.Run()</code>.
+        Inside <code>handleMessage</code>, a second goroutine reads the stream-json stdout pipe,
+        while a <code>time.Ticker</code> (every 2 s) edits the Slack placeholder with live progress.
+        The event-listening loop and the main thread both run independently.
       </div>
     </div>
     <div class="concur-card">
